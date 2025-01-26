@@ -1,6 +1,7 @@
 import re
 import random
 import logging
+from datetime import datetime
 
 from aiogram import Router, F
 from aiogram.types import Message, ReplyKeyboardRemove, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton
@@ -557,7 +558,7 @@ async def process_order_paid(callback: CallbackQuery, state: FSMContext):
         message_text = callback.message.text
         order_id = int(message_text.split('ID ордера: ')[1].split('\n')[0])
 
-        # Проверяем, можно ли изменять статус ордера
+        # Check if order can be modified
         if not await can_user_modify_order(order_id):
             await callback.message.answer(
                 "Этот ордер уже обработан администратором и не может быть изменен.",
@@ -565,7 +566,7 @@ async def process_order_paid(callback: CallbackQuery, state: FSMContext):
             )
             return
 
-        # Сохраняем ID ордера и ID сообщения в состоянии
+        # Save order ID and message ID in state
         await state.update_data(
             order_id=order_id,
             original_message_id=callback.message.message_id
@@ -578,10 +579,10 @@ async def process_order_paid(callback: CallbackQuery, state: FSMContext):
         )
 
         await callback.message.answer(
-            "Пожалуйста, отправьте хеш транзакции:",
+            "📸 Пожалуйста, отправьте скриншот подтверждения оплаты:",
             reply_markup=cancel_keyboard
         )
-        await state.set_state(OrderPaid.waiting_for_tx_hash)
+        await state.set_state(OrderPaid.waiting_for_screenshot)
 
     except Exception as e:
         logging.error(f"Error in process_order_paid: {e}")
@@ -592,18 +593,10 @@ async def process_order_paid(callback: CallbackQuery, state: FSMContext):
         await state.clear()
 
 
-@user.message(OrderPaid.waiting_for_tx_hash)
-async def process_tx_hash(message: Message, state: FSMContext):
-    if message.text == "Отмена":
-        await state.clear()
-        await message.answer(
-            "Операция отменена.",
-            reply_markup=user_main_keyboard
-        )
-        return
-
+@user.message(OrderPaid.waiting_for_screenshot, F.photo)
+async def process_payment_screenshot(message: Message, state: FSMContext):
     try:
-        # Получаем данные из состояния
+        # Get data from state
         data = await state.get_data()
         order_id = data.get('order_id')
         original_message_id = data.get('original_message_id')
@@ -611,19 +604,28 @@ async def process_tx_hash(message: Message, state: FSMContext):
         if not order_id:
             raise ValueError("Order ID not found")
 
-        tx_hash = message.text.strip()
+        # Get the largest photo size file_id
+        file_id = message.photo[-1].file_id
 
-        # Обновляем статус ордера и хеш транзакции в базе данных
-        success = await update_order_status(order_id, "Оплачено", tx_hash)
+        # Get current UTC time for payment
+        payment_time = datetime.utcnow()
+
+        # Update order status, file_id and payment date
+        success = await update_order_status(
+            order_id=order_id,
+            new_status="Оплачено",
+            file_id=file_id,
+            payment_date=payment_time
+        )
 
         if not success:
             raise Exception("Failed to update order status")
 
-        # Получаем обновленную информацию об ордере
+        # Get updated order info
         order_info = await get_order_info(order_id)
 
         if order_info:
-            # Пытаемся удалить оригинальное сообщение с ордером
+            # Try to delete original order message
             if original_message_id:
                 try:
                     await message.bot.delete_message(
@@ -633,60 +635,57 @@ async def process_tx_hash(message: Message, state: FSMContext):
                 except Exception as e:
                     logging.error(f"Failed to delete message: {e}")
 
-            # Готовим текст уведомления
-            notification_text = (
-                f"💰 Ордер помечен как оплаченный!\n\n"
+            # Notify user
+            await message.answer(
+                "✅ Скриншот успешно получен!\n"
+                "⏳ Ожидайте подтверждения от администратора.",
+                reply_markup=user_main_keyboard
+            )
+
+            # Format payment datetime for display
+            payment_time_str = payment_time.strftime("%Y-%m-%d %H:%M:%S")
+
+            # Prepare admin notification text
+            admin_notification = (
+                f"💳 Получено подтверждение оплаты!\n\n"
                 f"📋 Информация о заказе:\n"
                 f"🔢 ID ордера: {order_info['id']}\n"
-                f"👤 Пользователь: {message.from_user.full_name} (@{message.from_user.username}) ID:{message.from_user.id}\n"
-                f"💵 Сумма: {float(order_info['value']) * float(order_info['exchange_rate']):.2f} UAH "
-                f"(≈ {float(order_info['value']):.2f} {order_info['currency']})\n"
+                f"👤 Пользователь: {message.from_user.full_name} (@{message.from_user.username})\n"
+                f"💰 Валюта: {order_info['currency']}\n"
+                f"💵 Сумма: {float(order_info['value']) * float(order_info['exchange_rate']):.2f} UAH\n"
                 f"💱 Курс обмена: {order_info['exchange_rate']}\n"
                 f"🌐 Сеть: {order_info['network']}\n"
-                f"💳 Номер карты: {order_info['bank_card']}\n"
-                f"👛 Кошелек для получения: {order_info['wallet']}\n"
-                f"🔗 Хеш транзакции: {tx_hash}\n"
+                f"⌚ Время оплаты: {payment_time_str}\n"
                 f"⏳ Статус: {order_info['status']}"
             )
 
-            # Уведомляем администраторов
+            # Send notification with screenshot to admins
             for admin_id in ADMIN:
                 try:
-                    await message.bot.send_message(
-                        admin_id,
-                        notification_text,
+                    await message.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=file_id,
+                        caption=admin_notification,
                         reply_markup=admin_order_actions
                     )
                 except Exception as e:
-                    logging.error(f"Failed to notify admin {admin_id}: {e}")
+                    logging.error(f"Failed to send notification to admin {admin_id}: {e}")
 
-            # Уведомляем пользователя
-            await message.answer(
-                f"Ордер успешно помечен как оплаченный!\n"
-                f"Хеш транзакции: {tx_hash}",
-                reply_markup=user_main_keyboard
-            )
-
-        else:
-            await message.answer(
-                "Не удалось найти информацию об ордере.",
-                reply_markup=user_main_keyboard
-            )
+        await state.clear()
 
     except Exception as e:
-        logging.error(f"Error in process_tx_hash: {e}")
+        logging.error(f"Error in process_payment_screenshot: {e}")
         await message.answer(
-            "Произошла ошибка при обновлении статуса ордера.",
+            "❌ Произошла ошибка при обработке скриншота.",
             reply_markup=user_main_keyboard
         )
-    finally:
         await state.clear()
 
 
 async def can_user_modify_order(id: int) -> bool:
 
     status = await get_order_status(id)
-    if status in ["Ордер завершен администратором", "Ордер отменен администратором"]:
+    if status in ["Ордер завершен администратором✅", "Ордер отменен администратором❌"]:
         return False
     return True
 
@@ -768,3 +767,91 @@ async def process_order_id(message: Message, state: FSMContext):
         reply_markup=user_main_keyboard
     )
     await state.clear()
+
+
+@user.message(OrderPaid.waiting_for_screenshot, F.photo)
+async def handle_payment_screenshot(message: Message, state: FSMContext):
+    try:
+        data = await state.get_data()
+        order_id = data.get('order_id')
+
+        # Get the largest photo size file_id
+        file_id = message.photo[-1].file_id
+
+        # Update order status and save file_id
+        success = await update_order_status(
+            order_id=order_id,
+            new_status="Ожидает подтверждения⏳",
+            file_id=file_id
+        )
+
+        if success:
+            order_info = await get_order_info(order_id)
+            if order_info:
+                # Notify admins about payment
+                admin_notification = (
+                    f"💳 Оплата получена!\n\n"
+                    f"📋 Информация о заказе:\n"
+                    f"🔢 ID ордера: {order_info['id']}\n"
+                    f"👤 Пользователь: {message.from_user.full_name} (@{message.from_user.username})\n"
+                    f"💰 Валюта: {order_info['currency']}\n"
+                    f"💵 Сумма: {float(order_info['value']) * float(order_info['exchange_rate']):.2f} UAH\n"
+                    f"💱 Курс обмена: {order_info['exchange_rate']}\n"
+                    f"🌐 Сеть: {order_info['network']}\n"
+                    f"⏳ Статус: {order_info['status']}"
+                )
+
+                # Send notification with screenshot to admins
+                for admin_id in ADMIN:
+                    try:
+                        # First send the screenshot
+                        await message.bot.send_photo(
+                            chat_id=admin_id,
+                            photo=file_id,
+                            caption="📸 Скриншот оплаты"
+                        )
+                        # Then send order information
+                        await message.bot.send_message(
+                            chat_id=admin_id,
+                            text=admin_notification,
+                            reply_markup=admin_order_actions
+                        )
+                    except Exception as e:
+                        logging.error(f"Failed to send notification to admin {admin_id}: {e}")
+
+                await message.answer(
+                    "✅ Скриншот успешно получен!\n"
+                    "⏳ Ожидайте подтверждения от администратора."
+                )
+                await state.clear()
+            else:
+                await message.answer("❌ Произошла ошибка при получении информации о заказе.")
+        else:
+            await message.answer("❌ Произошла ошибка при обновлении статуса заказа.")
+
+    except Exception as e:
+        logging.error(f"Error in handle_payment_screenshot: {e}")
+        await message.answer("❌ Произошла ошибка при обработке скриншота.")
+
+    await state.clear()
+
+
+@user.message(OrderPaid.waiting_for_screenshot)
+async def invalid_payment_proof(message: Message):
+    """Handle invalid payment proof submissions"""
+    if message.text == "Отмена":
+        await message.answer(
+            "Операция отменена.",
+            reply_markup=user_main_keyboard
+        )
+        return
+
+    await message.answer(
+        "❌ Пожалуйста, отправьте скриншот оплаты в виде фотографии.\n"
+        "📸 Другие форматы не принимаются.",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Отмена")]],
+            resize_keyboard=True,
+            one_time_keyboard=True
+        )
+    )

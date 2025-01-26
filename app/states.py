@@ -50,7 +50,7 @@ class OrderCancellation(StatesGroup):
 
 # Состояние для подтверждения транзакции
 class OrderPaid(StatesGroup):
-    waiting_for_tx_hash = State()
+    waiting_for_screenshot = State()
 
 
 # Состояние для получения ID ордера

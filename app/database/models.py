@@ -44,12 +44,12 @@ class Order(Base):
     bank_card: Mapped[int] = mapped_column(BigInteger, nullable=False)
     wallet: Mapped[str] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=True)
-    tx_id: Mapped[str] = mapped_column(String, nullable=True)
+    file_id: Mapped[str] = mapped_column(String, nullable=True)
     date_created: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     user: Mapped["User"] = relationship("User", back_populates="orders")
-    date_payment: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
-    date_canceled: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
-    date_finished: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    date_payment: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    date_canceled: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    date_finished: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
 
 class Wallet(Base):

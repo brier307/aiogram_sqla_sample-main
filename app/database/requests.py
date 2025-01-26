@@ -6,6 +6,7 @@ from sqlalchemy import select, update, delete, desc, func
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 
+from datetime import datetime
 
 async def set_user(tg_id, username=None, full_name=None):
     async with async_session() as session:
@@ -196,7 +197,7 @@ async def get_order_info(id):
                     "bank_card": order.bank_card,
                     "wallet": order.wallet,
                     "status": order.status,
-                    "tx_id": order.tx_id,
+                    "file_id": order.file_id,
                     "date_created": order.date_created,
                 }
             logging.warning(f"Order with id {id} not found")
@@ -206,23 +207,25 @@ async def get_order_info(id):
             return None
 
 
-async def update_order_status(order_id: int, new_status: str, tx_hash: str = None):
+async def update_order_status(order_id: int, new_status: str, file_id: str = None, payment_date: datetime = None):
     """
-    Update order status and optionally transaction hash in database.
+    Update order status and file_id in database.
 
     Args:
         order_id (int): ID of the order to update
         new_status (str): New status for the order
-        tx_hash (str, optional): Transaction hash to store. Defaults to None.
-
-    Returns:
-        bool: True if update was successful, False otherwise
+        file_id (str, optional): Telegram file_id of the payment screenshot
+        payment_date (datetime, optional): Date and time when payment screenshot was received
     """
     async with async_session() as session:
         try:
             values = {"status": new_status}
-            if tx_hash is not None:
-                values["tx_id"] = tx_hash
+
+            if file_id is not None:
+                values["file_id"] = file_id
+
+            if payment_date is not None:
+                values["date_payment"] = payment_date
 
             await session.execute(
                 update(Order)

@@ -198,19 +198,22 @@ async def process_delete_address(message: Message, state: FSMContext):
 @admin.callback_query(F.data == "order_finished")
 async def finish_order(callback: CallbackQuery):
     try:
-        # Extract order ID from the message text
-        message_text = callback.message.text
-        order_id = int(message_text.split('ID ордера: ')[1].split('\n')[0])
+        # Get order ID from caption instead of text
+        message_caption = callback.message.caption
+        if not message_caption:
+            raise ValueError("Message caption is empty")
+
+        order_id = int(message_caption.split('ID ордера: ')[1].split('\n')[0])
 
         # Update order status in database
-        await update_order_status(order_id, "Ордер завершен администратором")
+        await update_order_status(order_id, "Ордер завершен администратором✅")
 
         # Get updated order info
         order_info = await get_order_info(order_id)
 
         if order_info:
             # Format updated message
-            updated_message = (
+            updated_caption = (
                 f"🔄 Обновление статуса ордера!\n\n"
                 f"📋 Информация о заказе:\n"
                 f"🔢 ID ордера: {order_info['id']}\n"
@@ -224,10 +227,13 @@ async def finish_order(callback: CallbackQuery):
                 f"⏳ Статус: {order_info['status']}"
             )
 
-            # Edit original message
-            await callback.message.edit_text(updated_message)
+            # Edit original message (photo with caption)
+            await callback.message.edit_caption(
+                caption=updated_caption,
+                reply_markup=admin_order_actions
+            )
 
-            # Уведомляем пользователя об завершении ордера администратором
+            # Notify user about order completion
             try:
                 await callback.bot.send_message(
                     order_info['user_id'],
@@ -246,9 +252,12 @@ async def finish_order(callback: CallbackQuery):
 @admin.callback_query(F.data == "cancel_order_by_admin")
 async def cancel_order_warning(callback: CallbackQuery, state: FSMContext):
     try:
-        # Extract order ID and store the message ID for later update
-        message_text = callback.message.text
-        order_id = int(message_text.split('ID ордера: ')[1].split('\n')[0])
+        # Extract order ID from caption instead of text
+        message_caption = callback.message.caption
+        if not message_caption:
+            raise ValueError("Message caption is empty")
+
+        order_id = int(message_caption.split('ID ордера: ')[1].split('\n')[0])
 
         # Store order ID and message info in state
         await state.update_data({
@@ -270,7 +279,7 @@ async def cancel_order_warning(callback: CallbackQuery, state: FSMContext):
 
     except Exception as e:
         logging.error(f"Error in cancel_order_warning: {e}")
-        await callback.answer("Произошла ошибка при подготовке отмены ордера")
+        await callback.answer("Произошла ошибка при обработке запроса")
 
 
 @admin.message(OrderCancellation.waiting_for_confirmation, F.text == "Отменить❌")
@@ -283,7 +292,7 @@ async def confirm_cancel_order(message: Message, state: FSMContext):
         chat_id = data.get('chat_id')
 
         # Update order status in database
-        await update_order_status(order_id, "Ордер отменен администратором")
+        await update_order_status(order_id, "Ордер отменен администратором❌")
 
         # Get updated order info
         order_info = await get_order_info(order_id)
@@ -425,7 +434,7 @@ async def confirm_finish_order(message: Message, state: FSMContext):
         chat_id = data.get('chat_id')
 
         # Update order status in database
-        await update_order_status(order_id, "Ордер завершен администратором")
+        await update_order_status(order_id, "Ордер завершен администратором✅")
 
         # Get updated order info
         order_info = await get_order_info(order_id)
@@ -732,7 +741,7 @@ async def finish_order_new(callback: CallbackQuery):
         order_id = int(callback.data.split('_')[-1])
 
         # Update order status in database
-        await update_order_status(order_id, "Ордер завершен администратором")
+        await update_order_status(order_id, "Ордер завершен администратором✅")
 
         # Get updated order info
         order_info = await get_order_info(order_id)
