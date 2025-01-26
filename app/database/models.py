@@ -47,6 +47,9 @@ class Order(Base):
     tx_id: Mapped[str] = mapped_column(String, nullable=True)
     date_created: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     user: Mapped["User"] = relationship("User", back_populates="orders")
+    date_payment: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    date_canceled: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
+    date_finished: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=True)
 
 
 class Wallet(Base):
