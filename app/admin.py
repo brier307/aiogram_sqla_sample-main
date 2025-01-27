@@ -304,8 +304,8 @@ async def confirm_cancel_order(message: Message, state: FSMContext):
                 f"📋 Информация о заказе:\n"
                 f"🔢 ID ордера: {order_info['id']}\n"
                 f"💰 Валюта: {order_info['currency']}\n"
-                f"💵 Сумма: {order_info['value']} {order_info['currency']} "
-                f"(≈ {float(order_info['value']):.2f} {'UAH' if order_info['currency'] == 'USDT' else 'USDT'})\n"
+                f"💵 Сумма: {float(order_info['value']) * float(order_info['exchange_rate']):.2f} UAH "
+                f"(≈ {float(order_info['value']):.2f} {order_info['currency']})\n"
                 f"💱Курс обмена: {order_info['exchange_rate']}\n"
                 f"🌐 Сеть: {order_info['network']}\n"
                 f"💳 Номер карты: {order_info['bank_card']}\n"
@@ -313,12 +313,26 @@ async def confirm_cancel_order(message: Message, state: FSMContext):
                 f"⏳ Статус: {order_info['status']}"
             )
 
-            # Update the original message without inline keyboard
-            await message.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=original_message_id,
-                text=updated_message
-            )
+            # Try to delete the original message
+            try:
+                await message.bot.delete_message(chat_id=chat_id, message_id=original_message_id)
+            except Exception as e:
+                logging.error(f"Error deleting original message: {e}")
+
+            # Send new message with updated info
+            if order_info.get('file_id'):
+                # If there's a screenshot, send photo with caption
+                await message.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=order_info['file_id'],
+                    caption=updated_message
+                )
+            else:
+                # If no screenshot, send text message
+                await message.bot.send_message(
+                    chat_id=chat_id,
+                    text=updated_message
+                )
 
             # Notify the user about order cancellation
             try:
@@ -623,11 +637,21 @@ async def order_list_handler(callback: CallbackQuery):
             await callback.answer("Нет доступных ордеров")
             return
 
-        # Обновляем сообщение с новой клавиатурой
-        await callback.message.edit_text(
-            "Список ордеров:",
-            reply_markup=keyboard
-        )
+        # Проверяем тип текущего сообщения
+        if callback.message.photo:
+            # Если текущее сообщение содержит фото, удаляем его и отправляем новое
+            await callback.message.delete()
+            await callback.message.answer(
+                text="Список ордеров:",
+                reply_markup=keyboard
+            )
+        else:
+            # Если текущее сообщение текстовое, редактируем его
+            await callback.message.edit_text(
+                text="Список ордеров:",
+                reply_markup=keyboard
+            )
+
         await callback.answer()
 
     except Exception as e:
@@ -671,13 +695,11 @@ async def order_info_handler(callback: CallbackQuery):
         # Добавляем кнопки действий
         builder.row(InlineKeyboardButton(
             text="Завершить✅",
-            # Добавляем ID ордера в callback_data
             callback_data=f"order_finished_{order_id}"
         ))
 
         builder.row(InlineKeyboardButton(
             text="Отменить ордер❌",
-            # Добавляем ID ордера в callback_data
             callback_data=f"cancel_order_by_admin_{order_id}"
         ))
 
@@ -687,11 +709,29 @@ async def order_info_handler(callback: CallbackQuery):
             callback_data="order_list"
         ))
 
-        # Обновляем сообщение
-        await callback.message.edit_text(
-            message_text,
-            reply_markup=builder.as_markup()
-        )
+        # Если есть file_id (скриншот оплаты), отправляем фото с информацией
+        if order_info.get('file_id'):
+            try:
+                await callback.message.delete()  # Удаляем предыдущее сообщение со списком
+                await callback.message.answer_photo(
+                    photo=order_info['file_id'],
+                    caption=message_text,
+                    reply_markup=builder.as_markup()
+                )
+            except Exception as e:
+                logging.error(f"Error sending photo: {e}")
+                # Если не удалось отправить фото, отправляем только текст
+                await callback.message.edit_text(
+                    text=message_text + "\n\n⚠️ Ошибка загрузки скриншота",
+                    reply_markup=builder.as_markup()
+                )
+        else:
+            # Если скриншота нет, отправляем только текст
+            await callback.message.edit_text(
+                text=message_text + "\n\n📸 Скриншот оплаты отсутствует",
+                reply_markup=builder.as_markup()
+            )
+
         await callback.answer()
 
     except Exception as e:
@@ -769,13 +809,24 @@ async def finish_order_new(callback: CallbackQuery):
                 callback_data="order_list"
             ))
 
-            # Edit original message with updated text and back button
-            await callback.message.edit_text(
-                updated_message,
-                reply_markup=builder.as_markup()
-            )
+            # Delete original message and send new one
+            await callback.message.delete()
 
-            # Уведомляем пользователя об завершении ордера администратором
+            if order_info.get('file_id'):
+                # If there's a screenshot, send photo with caption
+                await callback.message.answer_photo(
+                    photo=order_info['file_id'],
+                    caption=updated_message,
+                    reply_markup=builder.as_markup()
+                )
+            else:
+                # If no screenshot, send text message
+                await callback.message.answer(
+                    text=updated_message,
+                    reply_markup=builder.as_markup()
+                )
+
+            # Notify user about order completion
             try:
                 await callback.bot.send_message(
                     order_info['user_id'],

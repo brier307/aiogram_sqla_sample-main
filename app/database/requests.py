@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from datetime import datetime
 
+
 async def set_user(tg_id, username=None, full_name=None):
     async with async_session() as session:
         user = await session.scalar(select(User).where(User.tg_id == tg_id))
@@ -199,6 +200,7 @@ async def get_order_info(id):
                     "status": order.status,
                     "file_id": order.file_id,
                     "date_created": order.date_created,
+                    "date_payment": order.date_payment
                 }
             logging.warning(f"Order with id {id} not found")
             return None
