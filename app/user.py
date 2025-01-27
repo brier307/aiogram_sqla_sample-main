@@ -654,8 +654,10 @@ async def process_payment_screenshot(message: Message, state: FSMContext):
                 f"💰 Валюта: {order_info['currency']}\n"
                 f"💵 Сумма: {float(order_info['value']) * float(order_info['exchange_rate']):.2f} UAH\n"
                 f"💱 Курс обмена: {order_info['exchange_rate']}\n"
+                f"💳 Номер карты: {order_info['bank_card']}\n"
+                f"👛 Кошелек для получения: {order_info['wallet']}\n"
                 f"🌐 Сеть: {order_info['network']}\n"
-                f"⌚ Время оплаты: {payment_time_str}\n"
+                f"⌚ Время оплаты: {payment_time_str}UTC\n"
                 f"⏳ Статус: {order_info['status']}"
             )
 
