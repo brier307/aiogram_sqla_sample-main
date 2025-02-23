@@ -11,9 +11,12 @@ from aiogram.fsm.context import FSMContext
 
 from app.states import Form, OrderForm, NicknameChange, BankCardChange, OrderCancel, OrderPaid, OrderInfo
 
-from app.database.requests import (set_user, update_user_data, get_user_info, update_nickname, update_bank_card,
-                                   create_order, get_rate, get_wallets, get_order_info, get_support_contact,
-                                   update_order_status, get_order_status)
+from app.database.requests import (
+    set_user, update_user_data, get_user_info, update_nickname, update_bank_card,
+    create_order, get_rate, get_wallets, get_order_info, get_support_contact,
+    update_order_status, get_order_status, get_orders_page_with_total_for_user
+)
+
 from app.user_keyboard import *
 from app.admin_keyboards import admin_order_actions
 from config import ADMIN
@@ -692,15 +695,6 @@ async def can_user_modify_order(id: int) -> bool:
     return True
 
 
-@user.message(F.text == "Мои ордера🧾")
-async def request_order_id(message: Message, state: FSMContext):
-    await message.answer(
-        "Тут вы можете найти информацию о своих ордерах по ID или просмотреть список:",
-        reply_markup=exit_keyboard
-    )
-    await state.set_state(OrderInfo.waiting_for_order_id)
-
-
 @user.message(OrderInfo.waiting_for_order_id)
 async def exit_from_request_order_id(message: Message, state: FSMContext):
     if message.text == 'Выйти в меню🚪':
@@ -839,9 +833,10 @@ async def handle_payment_screenshot(message: Message, state: FSMContext):
 
 
 @user.message(OrderPaid.waiting_for_screenshot)
-async def invalid_payment_proof(message: Message):
+async def invalid_payment_proof(message: Message, state: FSMContext):
     """Handle invalid payment proof submissions"""
     if message.text == "Отмена":
+        await state.clear()  # Очищаем состояние
         await message.answer(
             "Операция отменена.",
             reply_markup=user_main_keyboard
@@ -857,3 +852,125 @@ async def invalid_payment_proof(message: Message):
             one_time_keyboard=True
         )
     )
+
+
+@user.message(F.text == "Мои ордера🧾")
+async def show_user_orders(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    try:
+        # Используем функцию для пользователей
+        orders_data = await get_orders_page_with_total_for_user(user_id, page=1, per_page=5)
+        if not orders_data["orders"]:
+            await message.answer(
+                "У вас пока нет ордеров.",
+                reply_markup=user_main_keyboard
+            )
+            return
+
+        # Создаем клавиатуру с ордерами
+        keyboard = await build_orders_keyboard(user_id, page=1)
+        if keyboard:
+            await message.answer(
+                "Ваши ордера:",
+                reply_markup=keyboard
+            )
+        else:
+            await message.answer(
+                "Не удалось загрузить список ордеров.",
+                reply_markup=user_main_keyboard
+            )
+    except Exception as e:
+        logging.error(f"Error showing orders for user {user_id}: {e}")
+        await message.answer(
+            "Произошла ошибка при загрузке ваших ордеров.",
+            reply_markup=user_main_keyboard
+        )
+
+
+@user.callback_query(F.data.startswith("order_list_"))
+async def handle_pagination(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    page = int(callback.data.split("_")[2])
+    try:
+        keyboard = await build_orders_keyboard(user_id, page)
+        if keyboard:
+            # Проверяем, является ли текущее сообщение фотографией
+            if callback.message.photo:
+                await callback.message.delete()  # Удаляем сообщение с фото
+                await callback.message.answer("Ваши ордера:", reply_markup=keyboard)
+            else:
+                await callback.message.edit_text("Ваши ордера:", reply_markup=keyboard)
+        else:
+            if callback.message.photo:
+                await callback.message.delete()
+                await callback.message.answer("Не удалось загрузить список ордеров.", reply_markup=None)
+            else:
+                await callback.message.edit_text("Не удалось загрузить список ордеров.", reply_markup=None)
+    except Exception as e:
+        logging.error(f"Error handling pagination for user {user_id}: {e}")
+        if callback.message.photo:
+            await callback.message.delete()
+            await callback.message.answer("Произошла ошибка.", reply_markup=None)
+        else:
+            await callback.message.edit_text("Произошла ошибка.", reply_markup=None)
+    await callback.answer()
+
+
+@user.callback_query(F.data.startswith("order_info_"))
+async def show_order_info(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    order_id = int(callback.data.split("_")[2])
+    order_info = await get_order_info(order_id)
+
+    if order_info and str(order_info["user_id"]) == str(user_id):
+        order_message = (
+            f"📋 Информация о заказе:\n"
+            f"🔢 ID ордера: {order_info['id']}\n"
+            f"💰 Исходная валюта: {order_info['currency']}\n"
+            f"💵 Сумма: {float(order_info['value']) * float(order_info['exchange_rate']):.2f} UAH "
+            f"(≈ {float(order_info['value']):.2f} {order_info['currency']})\n"
+            f"💱Курс обмена: {order_info['exchange_rate']}\n"
+            f"🌐 Сеть: {order_info['network']}\n"
+            f"💳 Номер карты: {order_info['bank_card']}\n"
+            f"👛 Кошелек для получения: {order_info['wallet']}\n"
+            f"⏳ Статус: {order_info['status']}"
+        )
+
+        # Создаем клавиатуру с кнопками действий
+        builder = InlineKeyboardBuilder()
+        builder.row(InlineKeyboardButton(
+            text="Пометить, как оплачено✅",
+            callback_data="order_paid"
+        ))
+        builder.row(InlineKeyboardButton(
+            text="Отменить ордер❌",
+            callback_data="cancel_order_by_user"
+        ))
+        builder.row(InlineKeyboardButton(
+            text="« Назад к списку",
+            callback_data="order_list_1"  # Возвращаемся на первую страницу
+        ))
+
+        # Проверяем наличие скриншота
+        if order_info.get('file_id'):
+            try:
+                await callback.message.delete()  # Удаляем предыдущее сообщение (список ордеров)
+                await callback.message.answer_photo(
+                    photo=order_info['file_id'],
+                    caption=order_message,
+                    reply_markup=builder.as_markup()
+                )
+            except Exception as e:
+                logging.error(f"Error sending photo for user {user_id}: {e}")
+                await callback.message.edit_text(
+                    text=order_message + "\n\n⚠️ Ошибка загрузки скриншота",
+                    reply_markup=builder.as_markup()
+                )
+        else:
+            await callback.message.edit_text(
+                text=order_message + "\n\n📸 Скриншот оплаты отсутствует",
+                reply_markup=builder.as_markup()
+            )
+    else:
+        await callback.message.edit_text("Ордер не найден или не принадлежит вам.", reply_markup=None)
+    await callback.answer()

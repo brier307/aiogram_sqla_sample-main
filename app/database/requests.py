@@ -349,3 +349,91 @@ async def get_all_users():
         except Exception as e:
             logging.error(f"Error fetching users: {e}")
             return []
+
+
+async def get_orders_page_for_user(user_id: int, page: int = 1, per_page: int = 10) -> List[Order]:
+    """
+    Получает страницу ордеров пользователя из базы данных
+
+    Args:
+        user_id: ID пользователя (tg_id)
+        page: Номер страницы
+        per_page: Количество ордеров на странице
+
+    Returns:
+        List[Order]: Список объектов Order для указанной страницы
+    """
+    async with async_session() as session:
+        try:
+            skip = (page - 1) * per_page
+            query = (
+                select(Order)
+                .where(Order.user_id == user_id)  # Фильтр по user_id
+                .order_by(Order.date_created.desc())
+                .offset(skip)
+                .limit(per_page)
+            )
+            result = await session.scalars(query)
+            return list(result)
+        except Exception as e:
+            logging.error(f"Error getting orders page for user {user_id}: {e}")
+            return []
+
+
+async def get_total_orders_for_user(user_id: int) -> int:
+    """
+    Получает общее количество ордеров пользователя в базе данных
+
+    Args:
+        user_id: ID пользователя (tg_id)
+
+    Returns:
+        int: Общее количество ордеров пользователя
+    """
+    async with async_session() as session:
+        try:
+            query = (
+                select(func.count())
+                .select_from(Order)
+                .where(Order.user_id == user_id)  # Фильтр по user_id
+            )
+            result = await session.scalar(query)
+            return result
+        except Exception as e:
+            logging.error(f"Error getting total orders count for user {user_id}: {e}")
+            return 0
+
+
+async def get_orders_page_with_total_for_user(user_id: int, page: int = 1, per_page: int = 10) -> Dict[str, Any]:
+    """
+    Получает страницу ордеров пользователя вместе с информацией о пагинации
+
+    Args:
+        user_id: ID пользователя (tg_id)
+        page: Номер страницы
+        per_page: Количество ордеров на странице
+
+    Returns:
+        Dict с ключами:
+            orders: List[Order] - список ордеров пользователя
+            total: int - общее количество ордеров пользователя
+            total_pages: int - общее количество страниц
+    """
+    try:
+        # Заменяем get_orders_page на get_orders_page_for_user
+        orders = await get_orders_page_for_user(user_id, page, per_page)
+        total = await get_total_orders_for_user(user_id)
+        total_pages = (total + per_page - 1) // per_page
+
+        return {
+            "orders": orders,
+            "total": total,
+            "total_pages": total_pages
+        }
+    except Exception as e:
+        logging.error(f"Error getting orders page with total for user {user_id}: {e}")
+        return {
+            "orders": [],
+            "total": 0,
+            "total_pages": 0
+        }
