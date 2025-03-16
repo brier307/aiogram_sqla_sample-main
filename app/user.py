@@ -14,8 +14,10 @@ from app.states import Form, OrderForm, NicknameChange, BankCardChange, OrderCan
 from app.database.requests import (
     set_user, update_user_data, get_user_info, update_nickname, update_bank_card,
     create_order, get_rate, get_wallets, get_order_info, get_support_contact,
-    update_order_status, get_order_status, get_orders_page_with_total_for_user
+    update_order_status, get_order_status, get_orders_page_with_total_for_user, is_profile_complete
 )
+
+from app.middlewares import ProfileCheckMiddleware
 
 from app.user_keyboard import *
 from app.admin_keyboards import admin_order_actions
@@ -25,11 +27,9 @@ from app.luhn import validate_card
 logging.basicConfig(level=logging.INFO)
 
 
-# from middlewares import BaseMiddleware
-
 user = Router()
 
-# user.message.middleware(BaseMiddleware())
+user.message.middleware(ProfileCheckMiddleware())
 
 
 @user.message(CommandStart())
@@ -92,19 +92,26 @@ async def process_bank_card(message: Message, state: FSMContext):
 
 # Вывод информации о профиле
 @user.message(F.text == 'Информация о профиле⚙️')
-async def profile_info(message: Message):
+async def profile_info(message: Message, state: FSMContext):
     tg_id = message.from_user.id
-    user_info = await get_user_info(tg_id)
+    if not await is_profile_complete(tg_id):
+        await message.answer(
+            "Ваш профиль не заполнен. Пожалуйста, завершите регистрацию, отправив номер телефона.",
+            reply_markup=phone_button
+        )
+        await state.set_state(Form.phone_number)
+        return
 
+    user_info = await get_user_info(tg_id)
     if user_info:
         profile_details = (
             f"🆔ID: {user_info['tg_id']}\n"
             f"📱Номер телефона: {user_info['phone_number']}\n"
             f"👤Никнейм: {user_info['nickname']}\n"
-            f"💳Номер карты: {user_info['bank_card']}"
+            f"💳Номер карты: <code>{user_info['bank_card']}</code>"
         )
         await message.answer(f"Информация о профиле:\n{profile_details}",
-                             reply_markup=user_profile_menu)
+                             reply_markup=user_profile_menu, parse_mode="HTML")
     else:
         await message.answer("Профиль не найден.")
 
@@ -172,9 +179,18 @@ async def support_info(message: Message):
 
 @user.message(F.text == "Продать USDT💵")
 async def start_order(message: Message, state: FSMContext):
+    tg_id = message.from_user.id
+    if not await is_profile_complete(tg_id):
+        await message.answer(
+            "Ваш профиль не заполнен. Пожалуйста, завершите регистрацию, отправив номер телефона.",
+            reply_markup=phone_button
+        )
+        await state.set_state(Form.phone_number)
+        return
+
     await message.answer("Выберите валюту для ввода суммы:", reply_markup=usdtuah_keyboard)
     await state.set_state(OrderForm.currency)
-    logging.info(f"User {message.from_user.id} started order creation")
+    logging.info(f"User {tg_id} started order creation")
 
 
 @user.message(F.text == "Отмена❌")
@@ -245,7 +261,10 @@ async def process_value(message: Message, state: FSMContext):
 async def process_network(message: Message, state: FSMContext):
     if message.text == "Вернуться🔙":
         data = await state.get_data()
-        await message.answer(f"Вы выбрали {data['currency']}. Теперь введите сумму:", reply_markup=user_back_button)
+        await message.answer(
+            f"Вы выбрали {data['currency']}. Теперь введите сумму:",
+            reply_markup=user_back_button
+        )
         await state.set_state(OrderForm.value)
         return
 
@@ -330,14 +349,15 @@ async def confirm_order(message: Message, state: FSMContext):
                 f"(≈ {float(order_info['value']):.2f} {order_info['currency']})\n"
                 f"💱Курс обмена: {order_info['exchange_rate']}\n"
                 f"🌐 Сеть: {order_info['network']}\n"
-                f"💳 Номер карты для получения UAH: {order_info['bank_card']}\n"
-                f"👛 Кошелек для перевода USDT: {order_info['wallet']}\n"
+                f"💳 Номер карты для получения UAH: <code>{order_info['bank_card']}</code>\n"
+                f"👛 Кошелек для перевода USDT: <code>{order_info['wallet']}</code>\n"
                 f"⏳ Статус: {order_info['status']}"
             )
 
             await message.answer(
                 f"Ордер успешно создан!\n\n{user_notification}",
-                reply_markup=user_order_actions
+                reply_markup=user_order_actions,
+                parse_mode="HTML"
             )
             logging.info(f"Order {order_id} created for user {message.from_user.id}")
 
@@ -389,8 +409,12 @@ async def show_order_summary(message: Message, state: FSMContext):
         wallet = random.choice(matching_wallets).address if matching_wallets else None
 
         if not wallet:
-            await message.answer("Нет доступных кошельков для выбранной сети")
-            await state.clear()
+            # Вместо очистки состояния возвращаем пользователя к выбору сети
+            await message.answer(
+                "Нет доступных кошельков для выбранной сети. Пожалуйста, выберите другую сеть:",
+                reply_markup=networks_keyboard
+            )
+            await state.set_state(OrderForm.network)  # Возвращаем в состояние выбора сети
             return
 
         # Получаем актуальный курс из БД
@@ -427,7 +451,8 @@ async def show_order_summary(message: Message, state: FSMContext):
         confirm_keyboard = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="Подтвердить")],
-                [KeyboardButton(text="Отменить")]
+                [KeyboardButton(text="Отменить")],
+                [KeyboardButton(text="Вернуться🔙")]  # Добавляем кнопку возврата
             ],
             resize_keyboard=True,
             one_time_keyboard=True
@@ -441,7 +466,10 @@ async def show_order_summary(message: Message, state: FSMContext):
 
     except Exception as e:
         logging.error(f"Error in show_order_summary: {e}")
-        await message.answer("Произошла ошибка при формировании заказа. Пожалуйста, попробуйте еще раз.")
+        await message.answer(
+            "Произошла ошибка при формировании заказа. Пожалуйста, попробуйте еще раз.",
+            reply_markup=user_main_keyboard
+        )
         await state.clear()
 
 
@@ -645,8 +673,6 @@ async def process_payment_screenshot(message: Message, state: FSMContext):
                 reply_markup=user_main_keyboard
             )
 
-            # Format payment datetime for display
-            payment_time_str = payment_time.strftime("%Y-%m-%d %H:%M:%S")
 
             # Prepare admin notification text
             admin_notification = (
@@ -660,7 +686,8 @@ async def process_payment_screenshot(message: Message, state: FSMContext):
                 f"💳 Номер карты: {order_info['bank_card']}\n"
                 f"👛 Кошелек для получения: {order_info['wallet']}\n"
                 f"🌐 Сеть: {order_info['network']}\n"
-                f"⌚ Время оплаты: {payment_time_str}UTC\n"
+                f"📅 Создан: {order_info['date_created'].strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"⌚ Время оплаты: {order_info['date_payment'].strftime('%Y-%m-%d %H:%M:%S')}\n"
                 f"⏳ Статус: {order_info['status']}"
             )
 
@@ -857,8 +884,15 @@ async def invalid_payment_proof(message: Message, state: FSMContext):
 @user.message(F.text == "Мои ордера🧾")
 async def show_user_orders(message: Message, state: FSMContext):
     user_id = message.from_user.id
+    if not await is_profile_complete(user_id):
+        await message.answer(
+            "Ваш профиль не заполнен. Пожалуйста, завершите регистрацию, отправив номер телефона.",
+            reply_markup=phone_button
+        )
+        await state.set_state(Form.phone_number)
+        return
+
     try:
-        # Используем функцию для пользователей
         orders_data = await get_orders_page_with_total_for_user(user_id, page=1, per_page=5)
         if not orders_data["orders"]:
             await message.answer(
@@ -867,7 +901,6 @@ async def show_user_orders(message: Message, state: FSMContext):
             )
             return
 
-        # Создаем клавиатуру с ордерами
         keyboard = await build_orders_keyboard(user_id, page=1)
         if keyboard:
             await message.answer(
@@ -887,10 +920,10 @@ async def show_user_orders(message: Message, state: FSMContext):
         )
 
 
-@user.callback_query(F.data.startswith("order_list_"))
+@user.callback_query(F.data.startswith("user_order_list_"))
 async def handle_pagination(callback: CallbackQuery):
     user_id = callback.from_user.id
-    page = int(callback.data.split("_")[2])
+    page = int(callback.data.split("_")[3])
     try:
         keyboard = await build_orders_keyboard(user_id, page)
         if keyboard:
@@ -948,7 +981,7 @@ async def show_order_info(callback: CallbackQuery):
         ))
         builder.row(InlineKeyboardButton(
             text="« Назад к списку",
-            callback_data="order_list_1"  # Возвращаемся на первую страницу
+            callback_data="user_order_list_1"  # Возвращаемся на первую страницу
         ))
 
         # Проверяем наличие скриншота

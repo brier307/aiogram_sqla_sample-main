@@ -322,10 +322,12 @@ async def get_orders_page_with_total(page: int = 1, per_page: int = 10) -> Dict[
             total_pages: int - общее количество страниц
     """
     try:
+        logging.info(f"Fetching orders for page {page}")
         orders = await get_orders_page(page, per_page)
         total = await get_total_orders()
         total_pages = (total + per_page - 1) // per_page
 
+        logging.info(f"Found {len(orders)} orders, total pages: {total_pages}")
         return {
             "orders": orders,
             "total": total,
@@ -437,3 +439,12 @@ async def get_orders_page_with_total_for_user(user_id: int, page: int = 1, per_p
             "total": 0,
             "total_pages": 0
         }
+
+
+async def is_profile_complete(tg_id: int) -> bool:
+    """Проверяет, заполнены ли все обязательные поля профиля пользователя."""
+    user_info = await get_user_info(tg_id)
+    if user_info is None:
+        return False
+    required_fields = ['phone_number', 'nickname', 'bank_card']
+    return all(user_info[field] is not None and user_info[field] != '' for field in required_fields)

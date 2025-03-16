@@ -1,8 +1,10 @@
 from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
                            InlineKeyboardMarkup, InlineKeyboardButton)
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from app.database.requests import get_orders_page_with_total
+from app.database.requests import get_orders_page_with_total, get_orders_page_with_total_for_user
+
 import logging
+from config import ADMIN
 
 admin_main_keyboard = ReplyKeyboardMarkup(keyboard=[
     [KeyboardButton(text="Информация об ордерах💸")],
@@ -66,60 +68,56 @@ def format_order_button_text(order) -> str:
     return f"ID: {order.id} | {order.currency} | {order.status}"
 
 
-async def build_orders_keyboard(page: int = 1) -> InlineKeyboardMarkup | None:
-    """
-    Создает инлайн-клавиатуру со списком ордеров и кнопками пагинации
-
-    Args:
-        page: Номер текущей страницы
-
-    Returns:
-        InlineKeyboardMarkup или None в случае ошибки
-    """
+# В файле admin_keyboards.py
+async def admin_build_orders_keyboard(page: int = 1, user_id: int = None) -> InlineKeyboardMarkup | None:
     try:
-        # Получаем данные об ордерах и пагинации
-        result = await get_orders_page_with_total(page)
+        # Список администраторов
+        ADMINS = [7185429091]
+
+        # Если пользователь — администратор, показываем все ордера
+        if user_id in ADMINS:
+            result = await get_orders_page_with_total(page)
+            logging.info(f"Admin {user_id} fetching all orders for page {page}")
+        else:
+            result = await get_orders_page_with_total_for_user(user_id, page)
+            logging.info(f"User {user_id} fetching own orders for page {page}")
+
         orders = result["orders"]
         total_pages = result["total_pages"]
 
-        if not orders:
-            return None
+        logging.info(f"Building keyboard for user {user_id}: Orders {len(orders)}, Total pages {total_pages}")
 
-        # Создаем билдер клавиатуры
         builder = InlineKeyboardBuilder()
 
-        # Добавляем кнопки для каждого ордера
-        for order in orders:
+        if not orders:
             builder.add(InlineKeyboardButton(
-                text=format_order_button_text(order),
-                callback_data=f"order_info_{order.id}"
+                text="Нет ордеров на этой странице",
+                callback_data="current_page"
             ))
-        builder.adjust(1)
+            logging.info(f"No orders found for user {user_id}")
+        else:
+            for order in orders:
+                builder.add(InlineKeyboardButton(
+                    text=format_order_button_text(order),
+                    callback_data=f"admin_order_info_{order.id}"
+                ))
+            builder.adjust(1)
 
-        # Добавляем кнопки пагинации
         pagination_buttons = []
-
         if page > 1:
             pagination_buttons.append(InlineKeyboardButton(
-                text="←",
-                callback_data=f"order_list_{page - 1}"
+                text="←", callback_data=f"order_list_{page - 1}"
             ))
-
         pagination_buttons.append(InlineKeyboardButton(
-            text=f"{page}/{total_pages}",
-            callback_data="current_page"
+            text=f"{page}/{total_pages}", callback_data="current_page"
         ))
-
         if page < total_pages:
             pagination_buttons.append(InlineKeyboardButton(
-                text="→",
-                callback_data=f"order_list_{page + 1}"
+                text="→", callback_data=f"order_list_{page + 1}"
             ))
-
         builder.row(*pagination_buttons)
 
         return builder.as_markup()
-
     except Exception as e:
-        logging.error(f"Error building orders keyboard: {e}")
+        logging.error(f"Error building orders keyboard for user {user_id}: {e}")
         return None

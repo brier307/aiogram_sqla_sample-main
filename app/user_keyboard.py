@@ -102,7 +102,7 @@ async def build_orders_keyboard(user_id: int, page: int = 1) -> InlineKeyboardMa
         if page > 1:
             pagination_buttons.append(InlineKeyboardButton(
                 text="←",
-                callback_data=f"order_list_{page - 1}"
+                callback_data=f"user_order_list_{page - 1}"
             ))
         pagination_buttons.append(InlineKeyboardButton(
             text=f"{page}/{total_pages}",
@@ -111,7 +111,7 @@ async def build_orders_keyboard(user_id: int, page: int = 1) -> InlineKeyboardMa
         if page < total_pages:
             pagination_buttons.append(InlineKeyboardButton(
                 text="→",
-                callback_data=f"order_list_{page + 1}"
+                callback_data=f"user_order_list_{page + 1}"
             ))
         builder.row(*pagination_buttons)
 

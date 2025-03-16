@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 
 from app.admin_keyboards import (admin_main_keyboard, admin_settings_menu, networks_keyboard, wallet_action,
                                  admin_warning_buttons, order_finish_buttons, exit_keyboard, admin_order_actions,
-                                 order_info_menu, build_orders_keyboard)
+                                 order_info_menu, admin_build_orders_keyboard)
 from app.database.requests import (get_wallets, get_rate, get_support_contact, update_rate,
                                    update_support_contact, add_wallet, delete_wallet,
                                    update_order_status, get_order_info, get_user_info)
@@ -622,49 +622,48 @@ async def exit_to_menu(message: Message, state: FSMContext):
     )
 
 
-@admin.callback_query(F.data == "order_list")
-@admin.callback_query(F.data.startswith("order_list_"))
+@admin.callback_query(F.data.in_({"order_list"}) | F.data.startswith("order_list_"))
 async def order_list_handler(callback: CallbackQuery):
-    """Обработчик списка ордеров и пагинации"""
     try:
-        # Извлекаем номер страницы из callback_data
         command = callback.data
         page = 1 if command == "order_list" else int(command.split("_")[-1])
+        user_id = callback.from_user.id
+        logging.info(f"Handling order list for user {user_id}, command: {command}, page: {page}")
 
-        # Создаем клавиатуру
-        keyboard = await build_orders_keyboard(page)
+        keyboard = await admin_build_orders_keyboard(page, user_id)
         if not keyboard:
-            await callback.answer("Нет доступных ордеров")
+            logging.info(f"No keyboard generated for user {user_id}, page {page}")
+            await callback.answer("Нет ордеров для отображения")
             return
 
-        # Проверяем тип текущего сообщения
+        logging.info(f"Generated keyboard for user {user_id}, page {page}")
         if callback.message.photo:
-            # Если текущее сообщение содержит фото, удаляем его и отправляем новое
             await callback.message.delete()
             await callback.message.answer(
                 text="Список ордеров:",
                 reply_markup=keyboard
             )
         else:
-            # Если текущее сообщение текстовое, редактируем его
             await callback.message.edit_text(
                 text="Список ордеров:",
                 reply_markup=keyboard
             )
-
         await callback.answer()
-
+    except ValueError as e:
+        logging.error(f"Invalid page number for user {callback.from_user.id}: {e}")
+        await callback.answer("Неверный номер страницы")
     except Exception as e:
-        logging.error(f"Error in order list callback: {e}")
-        await callback.answer("Произошла ошибка при загрузке списка ордеров")
+        logging.error(f"Error in order list callback for user {callback.from_user.id}: {e}")
+        await callback.answer(f"Ошибка: {str(e)}")
 
 
-@admin.callback_query(F.data.startswith("order_info_"))
+@admin.callback_query(F.data.startswith("admin_order_info_"))
 async def order_info_handler(callback: CallbackQuery):
     """Обработчик просмотра информации об ордере"""
     try:
-        # Получаем ID ордера из callback_data
+        # Извлекаем ID ордера из callback_data
         order_id = int(callback.data.split('_')[-1])
+        order_info = await get_order_info(order_id)
 
         # Получаем информацию об ордере
         order_info = await get_order_info(order_id)
