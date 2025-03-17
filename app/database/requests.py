@@ -11,29 +11,37 @@ from datetime import datetime
 
 async def set_user(tg_id, username=None, full_name=None):
     async with async_session() as session:
-        user = await session.scalar(select(User).where(User.tg_id == tg_id))
-
-        if user:
-            return True
-        else:
-            # Добавляем пользователя с tg_id, username и full_name
-            new_user = User(
-                tg_id=tg_id,
-                username=username,
-                full_name=full_name
-            )
-            session.add(new_user)
-            await session.commit()
+        try:
+            user = await session.scalar(select(User).where(User.tg_id == tg_id))
+            if user:
+                return True
+            else:
+                new_user = User(tg_id=tg_id, username=username, full_name=full_name)
+                session.add(new_user)
+                await session.commit()
+                logging.info(f"Пользователь {tg_id} успешно добавлен")
+                return False
+        except Exception as e:
+            logging.error(f"Ошибка при сохранении пользователя {tg_id}: {e}")
+            await session.rollback()
             return False
 
 
 # Функция для обновления данных пользователя
 async def update_user_data(tg_id, field, value):
     async with async_session() as session:
-        await session.execute(
-            update(User).where(User.tg_id == tg_id).values({field: value})
-        )
-        await session.commit()
+        try:
+            user = await session.scalar(select(User).where(User.tg_id == tg_id))
+            if not user:
+                await set_user(tg_id)  # Создаём пользователя, если его нет
+            await session.execute(
+                update(User).where(User.tg_id == tg_id).values({field: value})
+            )
+            await session.commit()
+            logging.info(f"Поле {field} обновлено для tg_id={tg_id}")
+        except Exception as e:
+            logging.error(f"Ошибка при обновлении данных пользователя {tg_id}: {e}")
+            await session.rollback()
 
 
 async def get_user_info(tg_id):

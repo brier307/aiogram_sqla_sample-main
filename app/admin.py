@@ -6,6 +6,8 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.filters import Filter, CommandStart, Command
 from aiogram.fsm.context import FSMContext
 
+from config import ADMIN
+
 
 from app.admin_keyboards import (admin_main_keyboard, admin_settings_menu, networks_keyboard, wallet_action,
                                  admin_warning_buttons, order_finish_buttons, exit_keyboard, admin_order_actions,
@@ -27,7 +29,7 @@ admin = Router()
 
 class Admin(Filter):
     def __init__(self):
-        self.admins = [7185429091]
+        self.admins = ADMIN
 
     async def __call__(self, message: Message):
         return message.from_user.id in self.admins
@@ -135,6 +137,11 @@ async def add_wallets(callback: CallbackQuery, state: FSMContext):
 # Хендлер для состояния ожидания сети
 @admin.message(WalletManagement.waiting_for_network)
 async def process_network(message: Message, state: FSMContext):
+    if message.text == "Выйти🚪":
+        await state.clear()
+        await message.answer("Вы вернулись в главное меню.", reply_markup=admin_main_keyboard)
+        return
+
     network = message.text
     await state.update_data(network=network)
     await message.answer("Отправьте адрес криптокошелька:")
@@ -144,6 +151,11 @@ async def process_network(message: Message, state: FSMContext):
 # Хендлер для состояния ожидания адреса
 @admin.message(WalletManagement.waiting_for_address)
 async def process_address(message: Message, state: FSMContext):
+    if message.text == "Выйти🚪":
+        await state.clear()
+        await message.answer("Вы вернулись в главное меню.", reply_markup=admin_main_keyboard)
+        return
+
     address = message.text
     data = await state.get_data()
     network = data.get("network")

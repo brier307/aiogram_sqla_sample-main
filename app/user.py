@@ -34,58 +34,51 @@ user.message.middleware(ProfileCheckMiddleware())
 
 @user.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
-    # Получаем необходимые данные из объекта message.from_user
     tg_id = message.from_user.id
     username = message.from_user.username
     full_name = message.from_user.full_name
 
-    # Проверяем, есть ли пользователь в БД
     user_exists = await set_user(tg_id, username, full_name)
-
     if user_exists:
-        await message.answer('Добро пожаловать!\n'
-                             'Для изменения настроек профиля воспользуйтесь меню⚙️',
-                             reply_markup=user_main_keyboard)
+        user_info = await get_user_info(tg_id)
+        if await is_profile_complete(tg_id):
+            await message.answer('Добро пожаловать!\n...', reply_markup=user_main_keyboard)
+        else:
+            await message.answer('Пожалуйста, завершите регистрацию, отправив номер телефона.', reply_markup=phone_button)
+            await state.set_state(Form.phone_number)
     else:
         await message.answer('Пожалуйста, отправьте ваш номер телефона.', reply_markup=phone_button)
         await state.set_state(Form.phone_number)
 
-
-# Хендлер для получения номера телефона
 @user.message(Form.phone_number, F.contact)
 async def process_phone_number(message: Message, state: FSMContext):
     phone_number = message.contact.phone_number
-    await update_user_data(message.from_user.id, 'phone_number', phone_number)
+    tg_id = message.from_user.id
+    await update_user_data(tg_id, 'phone_number', phone_number)
+    logging.info(f"Сохранён телефон {phone_number} для tg_id={tg_id}")
     await message.answer('Теперь введите ваш никнейм.', reply_markup=ReplyKeyboardRemove())
     await state.set_state(Form.nickname)
 
-
-# Хендлер для получения никнейма
 @user.message(Form.nickname)
 async def process_nickname(message: Message, state: FSMContext):
     nickname = message.text
-    await update_user_data(message.from_user.id, 'nickname', nickname)
+    tg_id = message.from_user.id
+    await update_user_data(tg_id, 'nickname', nickname)
+    logging.info(f"Сохранён никнейм {nickname} для tg_id={tg_id}")
     await message.answer('Теперь введите номер вашей банковской карты.')
     await state.set_state(Form.bank_card)
 
-
-# Хендлер для получения номера банковской карты
 @user.message(Form.bank_card)
 async def process_bank_card(message: Message, state: FSMContext):
     bank_card = message.text
+    tg_id = message.from_user.id
 
-    # Проверка на числовой формат и длину номера карты
-    if not re.match(r'^\d{16}$', bank_card):
+    if not re.match(r'^\d{16}$', bank_card) or not validate_card(bank_card):
         await message.answer('Пожалуйста, введите корректный номер карты (16 цифр).')
         return
 
-    # Проверяем валидность номера карты по алгоритму Луна
-    if not validate_card(bank_card):
-        await message.answer('Неверный номер карты. Попробуйте снова.')
-        return
-
-    # Сохраняем данные в БД
-    await update_user_data(message.from_user.id, 'bank_card', bank_card)
+    await update_user_data(tg_id, 'bank_card', bank_card)
+    logging.info(f"Сохранена карта {bank_card} для tg_id={tg_id}")
     await message.answer('Спасибо! Вы прошли регистрацию.', reply_markup=user_main_keyboard)
     await state.clear()
 
@@ -969,40 +962,46 @@ async def show_order_info(callback: CallbackQuery):
             f"⏳ Статус: {order_info['status']}"
         )
 
-        # Создаем клавиатуру с кнопками действий
+        # Список статусов, при которых клавиатура не отображается
+        final_statuses = [
+            "Ордер отменен администратором❌",
+            "Ордер завершен администратором✅",
+            "Ордер отменен пользователем",
+            "Оплачено"
+        ]
+
+        # Создаём клавиатуру только если статус не в списке final_statuses
         builder = InlineKeyboardBuilder()
+        if order_info['status'] not in final_statuses:
+            builder.row(InlineKeyboardButton(
+                text="Пометить, как оплачено✅", callback_data="order_paid"
+            ))
+            builder.row(InlineKeyboardButton(
+                text="Отменить ордер❌", callback_data="cancel_order_by_user"
+            ))
+        # Кнопка "Назад" всегда доступна
         builder.row(InlineKeyboardButton(
-            text="Пометить, как оплачено✅",
-            callback_data="order_paid"
-        ))
-        builder.row(InlineKeyboardButton(
-            text="Отменить ордер❌",
-            callback_data="cancel_order_by_user"
-        ))
-        builder.row(InlineKeyboardButton(
-            text="« Назад к списку",
-            callback_data="user_order_list_1"  # Возвращаемся на первую страницу
+            text="« Назад к списку", callback_data="user_order_list_1"
         ))
 
-        # Проверяем наличие скриншота
         if order_info.get('file_id'):
             try:
-                await callback.message.delete()  # Удаляем предыдущее сообщение (список ордеров)
+                await callback.message.delete()
                 await callback.message.answer_photo(
                     photo=order_info['file_id'],
                     caption=order_message,
-                    reply_markup=builder.as_markup()
+                    reply_markup=builder.as_markup() if builder.buttons else None  # Убираем reply_markup, если кнопок нет
                 )
             except Exception as e:
                 logging.error(f"Error sending photo for user {user_id}: {e}")
                 await callback.message.edit_text(
                     text=order_message + "\n\n⚠️ Ошибка загрузки скриншота",
-                    reply_markup=builder.as_markup()
+                    reply_markup=builder.as_markup() if builder.buttons else None
                 )
         else:
             await callback.message.edit_text(
                 text=order_message + "\n\n📸 Скриншот оплаты отсутствует",
-                reply_markup=builder.as_markup()
+                reply_markup=builder.as_markup() if builder.buttons else None
             )
     else:
         await callback.message.edit_text("Ордер не найден или не принадлежит вам.", reply_markup=None)
